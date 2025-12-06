@@ -166,21 +166,30 @@ if sel_proc:
 # KPIs
 # -------------------------
 st.subheader("Indicadores principales")
-col1, col2, col3 = st.columns(3)
+col1, col2, col3, col4 = st.columns(4)
 
 if fdf.empty:
     col1.metric("Hallazgos totales", 0)
     col2.metric("Fuente mayoritaria", "Sin datos")
     col3.metric("Año con más hallazgos", "Sin datos")
+    col4.metric("Proceso con más hallazgos", "Sin datos")
 else:
+    # Total de hallazgos
     col1.metric("Hallazgos totales", len(fdf))
 
-    vc = fdf["Fuente"].value_counts()
-    col2.metric("Fuente mayoritaria", vc.idxmax() if not vc.empty else "Sin datos")
+    # Fuente mayoritaria
+    vc_fuente = fdf["Fuente"].value_counts()
+    col2.metric("Fuente mayoritaria", vc_fuente.idxmax() if not vc_fuente.empty else "Sin datos")
 
+    # Año con más hallazgos
     vc_year = fdf["Año"].value_counts()
     col3.metric("Año con más hallazgos",
                 int(vc_year.idxmax()) if not vc_year.empty else "Sin datos")
+
+    # 🔥 Proceso con más hallazgos (NUEVO KPI)
+    vc_proc = fdf["Proceso"].value_counts()
+    col4.metric("Proceso con más hallazgos",
+                vc_proc.idxmax() if not vc_proc.empty else "Sin datos")
 
 # -------------------------
 # TODOS LOS GRÁFICOS EN UNA SOLA PÁGINA
@@ -237,3 +246,4 @@ En conjunto, estos indicadores permiten identificar patrones relevantes en las f
 """
 
     st.write(descripcion)
+
