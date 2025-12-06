@@ -1,179 +1,239 @@
+# app.py
+# Dashboard unificado (una sola página) adaptado a datSetFinalll.csv
+
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
 
-# ============================
-#   CONFIGURACIÓN INICIAL
-# ============================
-st.set_page_config(
-    page_title="Dashboard de Hallazgos",
-    layout="wide"
-)
+# -------------------------
+# Normalización de columnas (robusta)
+# -------------------------
+def standardize_columns(df: pd.DataFrame) -> pd.DataFrame:
 
-st.title("Dashboard de Hallazgos Institucionales")
-st.write(
-    "Este dashboard permite explorar de forma dinámica el comportamiento de los hallazgos de auditoría, "
-    "incluyendo su distribución por proceso, su evolución en el tiempo, y los patrones más relevantes "
-    "que emergen del análisis descriptivo."
-)
+    df = df.rename(columns={c: c.strip() for c in df.columns})
 
-# ============================
-#   CARGA DEL ARCHIVO
-# ============================
-st.sidebar.header("Carga del archivo")
-uploaded_file = st.sidebar.file_uploader("Subir archivo CSV", type=["csv"])
+    mapping = {}
+    if "Codigo" in df.columns:
+        mapping["Codigo"] = "Codigo"
+    elif "Codigo " in df.columns:
+        mapping["Codigo "] = "Codigo"
 
-if uploaded_file is None:
-    st.warning("Por favor sube un archivo CSV para iniciar.")
+    if "Descripcion" in df.columns:
+        mapping["Descripcion"] = "Descripción"
+
+    if "Fecha reporte" in df.columns:
+        mapping["Fecha reporte"] = "FechaReporte"
+    elif "FechaReporte" in df.columns:
+        mapping["FechaReporte"] = "FechaReporte"
+
+    if "AccionesPlanteadas" in df.columns:
+        mapping["AccionesPlanteadas"] = "AccionesPlanteadas"
+
+    df = df.rename(columns=mapping)
+
+    # Crear faltantes
+    if "Proceso" not in df.columns:
+        if "Codigo" in df.columns:
+            df["Proceso"] = df["Codigo"].astype(str).str.strip()
+        else:
+            df["Proceso"] = ""
+
+    if "Fuente" not in df.columns:
+        df["Fuente"] = ""
+
+    if "Descripción" not in df.columns:
+        df["Descripción"] = ""
+
+    if "AccionesPlanteadas" not in df.columns:
+        df["AccionesPlanteadas"] = ""
+
+    df["Proceso"] = df["Proceso"].astype(str).str.strip()
+    df["Fuente"] = df["Fuente"].astype(str).str.strip()
+    df["Descripción"] = df["Descripción"].astype(str).str.strip()
+
+    def extract_year(x):
+        if pd.isna(x):
+            return np.nan
+        try:
+            return pd.to_datetime(x, errors="coerce").year
+        except:
+            return np.nan
+
+    if "FechaReporte" in df.columns:
+        df["Año"] = df["FechaReporte"].apply(extract_year)
+    else:
+        fecha_cols = [c for c in df.columns if "fecha" in c.lower()]
+        año_series = pd.Series([np.nan] * len(df))
+        for c in fecha_cols:
+            año_series = año_series.fillna(df[c].apply(extract_year))
+        df["Año"] = año_series
+
+    df = df.dropna(subset=["Año"], how="all").reset_index(drop=True)
+    return df
+
+
+# -------------------------
+# Visualizaciones
+# -------------------------
+def fig_donut(df):
+    if df.empty or df["Fuente"].dropna().empty:
+        return px.pie(title="Sin datos")
+
+    counts = df["Fuente"].value_counts().reset_index()
+    counts.columns = ["Fuente", "Count"]
+    fig = px.pie(counts, names="Fuente", values="Count", hole=0.45,
+                 title="Distribución de hallazgos por fuente")
+    fig.update_traces(textinfo="percent+label")
+    return fig
+
+def fig_line_year(df):
+    if df.empty or df["Año"].dropna().empty:
+        return px.line(title="Sin datos")
+
+    counts = df.groupby("Año").size().reset_index(name="Count")
+    return px.line(counts, x="Año", y="Count", markers=True,
+                   title="Hallazgos por año")
+
+def fig_bar_process(df):
+    if df.empty or df["Proceso"].dropna().empty:
+        return px.bar(title="Sin datos")
+
+    counts = df["Proceso"].value_counts().reset_index()
+    counts.columns = ["Proceso", "Count"]
+    counts = counts.sort_values("Count", ascending=True)
+
+    return px.bar(counts, x="Count", y="Proceso", orientation="h",
+                  title="Hallazgos por proceso")
+
+def fig_lines_source(df):
+    if df.empty or df["Fuente"].dropna().empty or df["Año"].dropna().empty:
+        return px.line(title="Sin datos")
+
+    grouped = df.groupby(["Año", "Fuente"]).size().reset_index(name="Count")
+    return px.line(grouped, x="Año", y="Count", color="Fuente",
+                   markers=True, title="Evolución de hallazgos por fuente")
+
+
+# -------------------------
+# Streamlit App (UNA SOLA PÁGINA)
+# -------------------------
+st.set_page_config(page_title="Dashboard EPA.ESP", layout="wide")
+
+st.title("Dashboard de Hallazgos - EPA.ESP")
+st.write("Cargue un archivo CSV o Excel con el dataset de hallazgos.")
+
+uploaded = st.file_uploader("Cargar archivo", type=["csv", "xlsx"])
+
+if uploaded is None:
+    st.info("Sube un archivo para comenzar.")
     st.stop()
 
-df = pd.read_csv(uploaded_file)
-
-# ============================
-#   NORMALIZACIÓN DE COLUMNAS
-# ============================
-def standardize_columns(df):
-    df.columns = df.columns.str.strip().str.replace(" ", "_")
-
-    for col in df.columns:
-        try:
-            df[col] = df[col].astype(str).str.strip()
-        except:
-            pass
-    return df
+try:
+    if uploaded.name.endswith(".csv"):
+        df = pd.read_csv(uploaded)
+    else:
+        df = pd.read_excel(uploaded)
+except Exception as e:
+    st.error(f"Error leyendo el archivo ({e})")
+    st.stop()
 
 df = standardize_columns(df)
 
-# Validación básica
-required_cols = ["Proceso", "Hallazgo", "Fecha", "Accion_del_Hallazgo"]
-for col in required_cols:
-    if col not in df.columns:
-        st.error(f"Falta la columna requerida: **{col}**")
-        st.stop()
+# -------------------------
+# FILTROS
+# -------------------------
+st.sidebar.title("Filtros")
 
-df["Fecha"] = pd.to_datetime(df["Fecha"], errors="coerce")
-df["Año"] = df["Fecha"].dt.year
+years = sorted([int(y) for y in df["Año"].dropna().unique().tolist()])
+fuentes = sorted(df["Fuente"].dropna().unique().tolist())
+procesos = sorted(df["Proceso"].dropna().unique().tolist())
 
-# ============================
-#   FILTROS
-# ============================
-st.sidebar.header("Filtros")
+sel_year = st.sidebar.multiselect("Año", years)
+sel_fuente = st.sidebar.multiselect("Fuente", fuentes)
+sel_proc = st.sidebar.multiselect("Proceso", procesos)
 
-years = sorted(df["Año"].dropna().unique())
-procesos = sorted(df["Proceso"].unique())
-acciones = sorted(df["Accion_del_Hallazgo"].unique())
+fdf = df.copy()
 
-year_filter = st.sidebar.multiselect("Año", years)
-proceso_filter = st.sidebar.multiselect("Proceso", procesos)
-accion_filter = st.sidebar.multiselect("Acción del hallazgo", acciones)
+if sel_year:
+    fdf = fdf[fdf["Año"].isin(sel_year)]
+if sel_fuente:
+    fdf = fdf[fdf["Fuente"].isin(sel_fuente)]
+if sel_proc:
+    fdf = fdf[fdf["Proceso"].isin(sel_proc)]
 
-if st.sidebar.button("Limpiar filtros"):
-    year_filter = []
-    proceso_filter = []
-    accion_filter = []
-
-filtered_df = df.copy()
-
-if year_filter:
-    filtered_df = filtered_df[filtered_df["Año"].isin(year_filter)]
-
-if proceso_filter:
-    filtered_df = filtered_df[filtered_df["Proceso"].isin(proceso_filter)]
-
-if accion_filter:
-    filtered_df = filtered_df[filtered_df["Accion_del_Hallazgo"].isin(accion_filter)]
-
-# ============================
-#   MÉTRICAS PRINCIPALES
-# ============================
-st.header("Indicadores Generales")
-
+# -------------------------
+# KPIs
+# -------------------------
+st.subheader("Indicadores principales")
 col1, col2, col3 = st.columns(3)
 
-col1.metric("Total de Hallazgos", len(filtered_df))
-col2.metric("Procesos Involucrados", filtered_df["Proceso"].nunique())
-col3.metric("Años Analizados", filtered_df["Año"].nunique())
+if fdf.empty:
+    col1.metric("Hallazgos totales", 0)
+    col2.metric("Fuente mayoritaria", "Sin datos")
+    col3.metric("Año con más hallazgos", "Sin datos")
+else:
+    col1.metric("Hallazgos totales", len(fdf))
 
-# ============================
-#   HALLAZGOS PRINCIPALES
-# ============================
-st.header("Hallazgos Principales")
+    vc = fdf["Fuente"].value_counts()
+    col2.metric("Fuente mayoritaria", vc.idxmax() if not vc.empty else "Sin datos")
 
-st.subheader("Hallazgos más frecuentes")
-hall_freq = filtered_df["Hallazgo"].value_counts().nlargest(10)
-st.write(hall_freq)
+    vc_year = fdf["Año"].value_counts()
+    col3.metric("Año con más hallazgos",
+                int(vc_year.idxmax()) if not vc_year.empty else "Sin datos")
 
-# ---- PROCESO CON MÁS HALLAZGOS ----
-st.subheader("Proceso con más hallazgos")
+# -------------------------
+# TODOS LOS GRÁFICOS EN UNA SOLA PÁGINA
+# -------------------------
+st.subheader("Gráficos")
 
-proc_count = (
-    filtered_df["Proceso"]
-    .value_counts()
-    .reset_index()
-    .rename(columns={"index": "Proceso", "Proceso": "Cantidad"})
-)
+# Primera fila: Donut + Línea por año
+c1, c2 = st.columns([1, 2])
+c1.plotly_chart(fig_donut(fdf), use_container_width=True)
+c2.plotly_chart(fig_line_year(fdf), use_container_width=True)
 
-if not proc_count.empty:
-    proceso_top = proc_count.iloc[0]
-    st.markdown(
-        f"""
-        **Proceso con mayor cantidad de hallazgos:**  
-        - **{proceso_top['Proceso']}** con **{proceso_top['Cantidad']} hallazgos**.
-        """
-    )
-    st.dataframe(proc_count)
+# Segunda fila: Barras horizontales por proceso
+st.plotly_chart(fig_bar_process(fdf), use_container_width=True)
 
-# ============================
-#   GRÁFICO: HALLAZGOS POR PROCESO
-# ============================
-st.header("Distribución de Hallazgos por Proceso")
+# Tercera fila: línea comparativa por fuente
+st.plotly_chart(fig_lines_source(fdf), use_container_width=True)
 
-if not proc_count.empty:
-    fig_proc = px.bar(
-        proc_count,
-        x="Cantidad",
-        y="Proceso",
-        orientation="h",
-        title="Cantidad de hallazgos por proceso"
-    )
-    st.plotly_chart(fig_proc, use_container_width=True)
+# -------------------------
+# DESCRIPCIÓN AUTOMÁTICA DEL DASHBOARD
+# -------------------------
+st.subheader("Descripción automática del análisis")
 
-# ============================
-#   GRÁFICO: EVOLUCIÓN TEMPORAL
-# ============================
-st.header("Evolución Temporal de los Hallazgos")
+if fdf.empty:
+    st.write("No hay datos para generar una descripción automática. Ajusta los filtros.")
+else:
+    # --- análisis automático ---
+    total = len(fdf)
 
-evol_df = filtered_df.groupby("Año").size().reset_index(name="Cantidad")
+    # Fuente principal
+    vc_fuente = fdf["Fuente"].value_counts()
+    fuente_principal = vc_fuente.idxmax() if not vc_fuente.empty else "Sin datos"
+    cant_fuente_principal = vc_fuente.max() if not vc_fuente.empty else 0
 
-if not evol_df.empty:
-    fig_evo = px.line(
-        evol_df,
-        x="Año",
-        y="Cantidad",
-        markers=True,
-        title="Hallazgos por año"
-    )
-    st.plotly_chart(fig_evo, use_container_width=True)
+    # Proceso principal
+    vc_proc = fdf["Proceso"].value_counts()
+    proceso_principal = vc_proc.idxmax() if not vc_proc.empty else "Sin datos"
+    cant_proc_principal = vc_proc.max() if not vc_proc.empty else 0
 
-# ============================
-#   DESCRIPCIÓN AUTOMÁTICA
-# ============================
-st.header("Descripción Automática del Dashboard")
+    # Año con más casos
+    vc_years = fdf["Año"].value_counts()
+    año_principal = int(vc_years.idxmax()) if not vc_years.empty else "Sin datos"
+    cant_año_principal = vc_years.max() if not vc_years.empty else 0
 
-st.write(
-    """
-    Este dashboard consolida los resultados del análisis descriptivo en una herramienta visual diseñada
-    para facilitar la interpretación de los hallazgos institucionales. Cada sección integra componentes clave
-    del comportamiento de los datos, permitiendo una navegación clara y un análisis progresivo. La estructura
-    reúne todos los gráficos, métricas y tablas en una sola página, lo que simplifica la exploración sin necesidad
-    de cambiar de vista o cargar elementos adicionales.
+    # Construcción del texto
+    descripcion = f"""
+El conjunto de datos filtrado contiene **{total} hallazgos**.  
+La **fuente más frecuente** es **{fuente_principal}**, con **{cant_fuente_principal} registros**, lo que indica que este origen representa una proporción significativa del total analizado.
 
-    Los filtros permiten ajustar dinámicamente la información consultada, facilitando estudios específicos por
-    año, proceso o tipo de acción. La herramienta se adapta automáticamente a los criterios seleccionados,
-    actualizando los indicadores generales, los hallazgos más frecuentes, la identificación del proceso con mayor
-    número de observaciones, así como la evolución temporal y la distribución de hallazgos por proceso.
+En cuanto a los procesos, el **proceso con mayor número de hallazgos** es **{proceso_principal}**, alcanzando **{cant_proc_principal} casos**, lo que sugiere una posible concentración de oportunidades de mejora en esa área.
 
-    Gracias a su diseño unificado y a su lógica interactiva, este dashboard respalda la interpretación rigurosa de la
-    información y se convierte en un recurso fundamental para la toma de decisiones en auditoría y gestión institucional.
-    """
-)
+Respecto a la evolución temporal, el **año con más hallazgos** es **{año_principal}**, con **{cant_año_principal} registros**, lo que puede evidenciar un período de mayor actividad, auditoría o incremento en los reportes.
+
+En conjunto, estos indicadores permiten identificar patrones relevantes en las fuentes de hallazgos, los procesos involucrados y su comportamiento a lo largo del tiempo, facilitando la toma de decisiones y priorización de acciones correctivas.
+"""
+
+    st.write(descripcion)
